@@ -8,7 +8,8 @@ class DataFrameDataset(data.Dataset):
         for i, row in df.iterrows():
             label = row.label if not is_test else None
             text = row.text
-            examples.append(data.Example.fromlist([text, label], fields))
+            weight = row.weight
+            examples.append(data.Example.fromlist([text, label, weight], fields))
 
         super().__init__(examples, fields, **kwargs)
 

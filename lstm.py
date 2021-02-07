@@ -89,8 +89,6 @@ class SelfAttention(nn.Module):
             max_len, batch_size = inputs.size()[:2]
             inputs = inputs.permute(1, 0, 2)
 
-        # att = torch.mul(inputs, self.att_weights.expand_as(inputs))
-        # att = att.sum(-1)
         weights = torch.bmm(inputs,
                             self.att_weights  # (1, hidden_size)
                             .permute(1, 0)  # (hidden_size, 1)
@@ -101,9 +99,6 @@ class SelfAttention(nn.Module):
 
         attentions = F.softmax(F.relu(weights.squeeze()))
 
-        # apply weights
-#         import pdb
-#         pdb.set_trace()
         attentions = F.softmax(F.relu(weights))
 
         # apply weights
@@ -113,23 +108,6 @@ class SelfAttention(nn.Module):
         # get the final fixed vector representations of the sentences
         representations = weighted.sum(1).squeeze()
         
-# #         inputs = inputs.squeeze()
-#         temp = len(inputs.shape) - len(attentions.shape)
-#         att = attentions.clone()
-#         for i in range(temp):
-#             att = att.unsqueeze(-1)
-            
-            
-#         try:
-#             weighted = torch.mul(
-#                 inputs, att.expand_as(inputs))
-#         except Exception as e:
-#             print(e)
-#             return inputs.sum(1).squeeze(), attentions
-
-#         # get the final fixed vector representations of the sentences
-#         representations = weighted.sum(1).squeeze()
-
         return representations, attentions
     
 class MediaLSTM(TextModel):
@@ -171,10 +149,68 @@ class MediaLSTM(TextModel):
         embs = self.m_embeddings(media)
         x = self.featurize(ex)
         return (x * embs).sum(dim=1)
+    
+    
         
     def featurize(self, x):
-        import pdb
-        #pdb.set_trace()
+        wrd_ix = x[0]
+        lengths = x[1]
+        x = self.word_vectors(wrd_ix)
+        x = pack(x, lengths.tolist(), batch_first=True)
+        lstm_out, (hidden_state, cell_state) = self.lstm(x)
+        if self.att:
+            x, self.attentions = self.att_layer(lstm_out)
+        else:
+            output, _ = pad(lstm_out, batch_first=True)
+            # get the last time step for each sequence
+            idx = (lengths - 1).view(-1, 1).expand(output.size(0),
+                                                   output.size(2)).unsqueeze(1)
+            x = output.gather(1, Variable(idx)).squeeze(1)
+        return x
+
+class Weighted_MediaLSTM(TextModel):
+
+    def __init__(self,
+                 num_classes, vocab, att=False, we_dropout=0, dropout=0,
+                 we_dim=50, num_features=100, bidirectional=False, num_layers=1,
+                 max_norm=None, norm_type=2, scale_grad_by_freq=True, fine_tuning=False, **kwargs):
+
+        self.att = att
+        D = we_dim
+        C = num_classes
+        Co = num_features
+        hidden_dim = Co // 2 if bidirectional else Co
+        H = Co
+
+        super(Weighted_MediaLSTM, self).__init__(H, C, len(vocab), we_dim,
+                                       embedding_dropout=we_dropout,
+                                       padding_idx=0,
+                                       max_norm=max_norm, norm_type=norm_type,
+                                       scale_grad_by_freq=scale_grad_by_freq,
+                                       subword=False, fine_tuning=fine_tuning)
+
+        self.lstm = nn.LSTM(
+            D, hidden_dim,
+            num_layers=num_layers,
+            dropout=dropout,
+            bidirectional=bidirectional
+        )
+        if self.att:
+            self.att_layer = SelfAttention(Co, batch_first=True)
+            
+        # Media embedding
+        self.m_embeddings = nn.Embedding(num_classes, self.num_features,
+                                         max_norm=self.max_norm, norm_type=self.norm_type,
+                                         scale_grad_by_freq=self.scale_grad_by_freq)
+
+    def forward(self, ex, media, weight):
+        embs = self.m_embeddings(media)
+        x = self.featurize(ex)
+        return (x * embs * weight.reshape(len(embs),1)).sum(dim=1)
+    
+    
+        
+    def featurize(self, x):
         wrd_ix = x[0]
         lengths = x[1]
         x = self.word_vectors(wrd_ix)

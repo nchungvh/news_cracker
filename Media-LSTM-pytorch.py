@@ -1,15 +1,8 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[1]:
-
-
 import time,re
 import numpy as np
 import pandas as pd
 import matplotlib.pylab as plt
 from tqdm.notebook import tqdm
-from IPython.display import display
 
 import torch
 import torch.optim as optim
@@ -26,15 +19,8 @@ import plotly.express as px
 from lstm import *
 from utils import *
 
-#get_ipython().run_line_magic('matplotlib', 'inline')
 
 device = torch.device('cuda:0')
-
-# adatpted from:
-# https://medium.com/@sonicboom8/sentiment-analysis-torchtext-55fb57b1fab8
-
-
-# In[2]:
 
 
 NUM_EPOCHS = 400
@@ -44,29 +30,9 @@ INPUTS_LEN = 64
 MAX_EARLY_STOP = 3
 
 
-# In[3]:
-
-
-# cols = ['handle','language','title','text','favorite','reply','quote','retweet']
-# df = pd.read_csv("/mnt/localdata/rappaz/mediaobs/articles_en_1m.csv", header=None, names=cols)
-
-
-# In[4]:
-
-
 df = pd.read_csv('merge-G.csv',sep = '\t')
-
-
-# In[5]:
-
-
-# filter sources with really low article counts
-#ssz = df.groupby('handle').size()
-#low_cnt_sources = ssz[ssz<80].index.tolist()
-#df = df[~df.handle.isin(low_cnt_sources)]
-
-
-# In[5]:
+# df["weight"] = pd.to_numeric(df["weight"])
+df = df[:100]
 
 
 def proc_text(x):
@@ -110,7 +76,7 @@ text_field = Field(
     batch_first=True
 )
 label_field = Field(sequential=False, use_vocab=False)
-
+weight_field = Field(sequential=False, use_vocab=False)
 # we preprocess on train so that tokens only in test and val
 # will be labelled as "unknown"
 preprocessed_text = df_train['text'].apply(
@@ -124,6 +90,7 @@ preprocessed_text = df_train['text'].apply(
 data_fields = [
     ('text', text_field),
     ('label', label_field), 
+    ('weight', weight_field)
 ]
 
 trainds = DataFrameDataset(df_train,data_fields)
@@ -141,12 +108,13 @@ traindl, testdl, valdl = data.BucketIterator.splits(datasets=(trainds, testds, v
 
 # In[8]:
 
-
+import pdb
+#pdb.set_trace()
 # build the vocabulary using train and validation dataset and assign the vectors
 text_field.build_vocab(preprocessed_text, max_size=100000, vectors='fasttext.simple.300d')
 # build vocab for labels
 label_field.build_vocab(trainds)
-
+weight_field.build_vocab(trainds)
 # get the vocab instance
 vocab = text_field.vocab
 
@@ -157,7 +125,7 @@ print("padding token: ", vocab.stoi['<pad>'])
 # In[9]:
 
 
-model = MediaLSTM(len(id2handle), 
+model = Weighted_MediaLSTM(len(id2handle), 
                   vocab, 
                   att=True, 
                   padding_idx=vocab.stoi['<pad>'],
@@ -200,31 +168,7 @@ def compute_recalls(ds,model,vocab):
     
     return np.mean(scores_5),np.mean(scores_10),np.mean(scores_20)
 
-
-# In[75]:
-
-
-for batch_pos in tqdm(traindl):
-    print(batch_pos.text[0].shape)
-    batch_neg = neg_sampling_batch(batch_pos,trainds,device)
-    print(batch_neg.label)
-    break
-
-
-# In[11]:
-
-
 optimizer = optim.Adam(model.parameters(), LEARNING_RATE)
-
-
-# In[12]:
-
-
-#model = torch.load("/mnt/localdata/rappaz/mediaobs/models/model_1m.pt")
-
-
-# In[ ]:
-
 
 best_r = 0.0
 early_stop = 0
@@ -238,14 +182,15 @@ for epoch in range(NUM_EPOCHS):
         
         batch_neg = neg_sampling_batch(batch_pos,trainds,device)
         
-        out_pos = model(batch_pos.text,batch_pos.label)
-        out_neg = model(batch_neg.text,batch_pos.label) # pos handle, neg text examples
+        out_pos = model(batch_pos.text,batch_pos.label, batch_pos.weight)
+        out_neg = model(batch_neg.text,batch_pos.label, batch_pos.weight) # pos handle, neg text examples
         
         loss = -(out_pos - out_neg).sigmoid().log().sum()
         if torch.isnan(loss).item():
             flag = 1
             break
         loss.backward()
+        #print(loss)
         optimizer.step()
         losses.append(loss.item())
     if flag == 1:
