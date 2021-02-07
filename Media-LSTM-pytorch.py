@@ -32,7 +32,6 @@ MAX_EARLY_STOP = 3
 
 df = pd.read_csv('merge-G.csv',sep = '\t')
 # df["weight"] = pd.to_numeric(df["weight"])
-df = df[:100]
 
 
 def proc_text(x):
